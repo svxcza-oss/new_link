@@ -1,39 +1,71 @@
 #include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+#include "stm32f4xx_hal.h"
 
-// 1. 하드웨어 주소 (F401RE 데이터시트 기준 좌표)
-#define RCC_AHB1ENR  (*(volatile uint32_t*)0x40023830) 
-//usinged int , 32bit(4byte), _t 사용자 정의 자료형임을 나타냄.
-//그냥 usinged int 라고 쓰면 메모리마다 다 달라질수 있어서 uint라고 못 박는거임
-//Reset and Clock Control
-#define GPIOA_MODER  (*(volatile uint32_t*)0x40020000) 
-#define GPIOA_ODR    (*(volatile uint32_t*)0x40020014) 
-//General Purpose Input/Output
+UART_HandleTypeDef huart2;
 
-/*
-GPIOA: 0번부터 15번까지의 첫 번째 핀 묶음 (아까 LED가 연결된 PA5가 여기 속하죠.)
-
-GPIOB: 두 번째 묶음
-
-GPIOC: 세 번째 묶음
-
-GPIOD: 네 번째 묶음
-*/
+// 함수 선언
+void MX_GPIO_Init(void);
+void MX_USART2_UART_Init(void);
 
 int main(void) {
-    // [STEP 1] GPIOA 포트에 클록 공급 (0번 비트를 1로)
-    RCC_AHB1ENR |= (1 << 0);  
+    HAL_Init();
+    MX_GPIO_Init();
+    MX_USART2_UART_Init();
 
-    // [STEP 2] PA5 핀(내장 LED)을 출력 모드로 설정 (10번 비트 1로)
-    GPIOA_MODER &= ~(3 << 10); 
-    GPIOA_MODER |= (1 << 10);  
+    uint8_t rx_data;
+    uint8_t msg[] = "Received!\r\n";
 
     while (1) {
-        // [STEP 3] LED 켜기 (5번 비트를 1로)
-        GPIOA_ODR |= (1 << 5);
-        for (volatile int i = 0; i < 500000; i++); 
+        // UART 수신 대기 (에러 방지용으로 10ms만 대기)
+        HAL_StatusTypeDef status = HAL_UART_Receive(&huart2, &rx_data, 1, 10);
 
-        // [STEP 4] LED 끄기 (5번 비트를 0으로)
-        GPIOA_ODR &= ~(1 << 5);
-        for (volatile int i = 0; i < 500000; i++);
+        if (status == HAL_OK) {
+            // 데이터 받으면 맥북으로 다시 쏘고 LED 반전
+            HAL_UART_Transmit(&huart2, msg, 11, 100);
+            HAL_GPIO_TogglePin(GPIOA, GPIO_PIN_5);
+        } 
+        else if (status == HAL_ERROR) {
+            // ⭐️ 중요: 오버런 에러(ORE) 발생 시 강제 초기화 ⭐️
+            __HAL_UART_CLEAR_OREFLAG(&huart2);
+            HAL_UART_Receive(&huart2, &rx_data, 1, 0); 
+        }
     }
+}
+
+// 1. GPIO 초기화 (LED 핀 설정)
+void MX_GPIO_Init(void) {
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
+    GPIO_InitStruct.Pin = GPIO_PIN_5;
+    GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+    GPIO_InitStruct.Pull = GPIO_NOPULL;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+}
+
+// 2. UART 초기화 (통로 개방 및 핀 설정)
+void MX_USART2_UART_Init(void) {
+    __HAL_RCC_USART2_CLK_ENABLE();
+    __HAL_RCC_GPIOA_CLK_ENABLE();
+
+    // ⭐️ 님을 괴롭힌 범인: 핀을 'UART 모드(AF7)'로 설정해야 함 ⭐️
+    GPIO_InitTypeDef GPIO_InitStruct = {0};
+    GPIO_InitStruct.Pin = GPIO_PIN_2 | GPIO_PIN_3;
+    GPIO_InitStruct.Mode = GPIO_MODE_AF_PP;
+    GPIO_InitStruct.Pull = GPIO_PULLUP;
+    GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+    GPIO_InitStruct.Alternate = GPIO_AF7_USART2; // 이게 핵심!
+    HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+    huart2.Instance = USART2;
+    huart2.Init.BaudRate = 115200;
+    huart2.Init.WordLength = UART_WORDLENGTH_8B;
+    huart2.Init.StopBits = UART_STOPBITS_1;
+    huart2.Init.Parity = UART_PARITY_NONE;
+    huart2.Init.Mode = UART_MODE_TX_RX;
+    huart2.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+    huart2.Init.OverSampling = UART_OVERSAMPLING_16;
+    HAL_UART_Init(&huart2);
 }
